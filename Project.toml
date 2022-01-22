@@ -1,0 +1,17 @@
+name = "ConvexFit"
+uuid = "87351080-99b7-4180-88c0-67eb87125a50"
+authors = ["Junyuan Chen <norman.chen.git@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+
+[compat]
+julia = "1"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
