@@ -48,17 +48,18 @@ function updatex!(ss, x, ca)
     end
 end
 
-function convexfit(A::Matrix{TF}, b::Vector{TF};
+function convexfit(A::Matrix{TF}, b::Vector{TF}, λ::Real=zero(TF);
         x0::AbstractVector{<:Real}=fill(convert(TF,1/size(A,2)), size(A,2)),
-        λ::Real=zero(TF),
-        ftol::Real=convert(TF, 1e-8),
-        xtol::Real=convert(TF, 1e-8),
+        ftol::Real=convert(TF, 1e-6),
+        xtol::Real=convert(TF, 1e-6),
         maxiter::Integer=1000,
-        store_trace::Bool = false,
-        show_trace::Bool = false,
+        store_trace::Bool=false,
+        show_trace::Bool=false,
+        show_thread::Bool=false,
         cache::Cache=Cache(A)) where TF<:AbstractFloat
 
     sum(x0) == 1 || throw(ArgumentError("elements of x0 do not sum up to 1"))
+    λ = convert(TF, λ)
     λ < 0 && throw(ArgumentError("regularization parameter cannot be negative"))
 
     f_converged = false
@@ -113,13 +114,13 @@ function convexfit(A::Matrix{TF}, b::Vector{TF};
         # Ensure that iter always represents the number of steps from x0r
         iter += 1
         # xnorm should not be updated until the next iteration
-        update!(tr, iter, f, rss, xnorm, ix, ss, store_trace, show_trace)
+        update!(tr, iter, f, rss, xnorm, ix, ss, store_trace, show_trace, show_thread)
     end
-    return SolverResult{TF}(x0, x, cache.Ax, iter, f, rss, λ, xnorm,
+    return SolverResult{TF}(x0, x, copy(cache.Ax), iter, f, rss, λ, xnorm,
         dfnorm, ftol, f_converged, dxnorm, xtol, x_converged, tr)
 end
 
-function convexfit(A::AbstractMatrix, b::AbstractVecOrMat; kwargs...)
+function convexfit(A::AbstractMatrix, b::AbstractVecOrMat, λ=0.0; kwargs...)
     TF = promote_type(eltype(A), eltype(b))
     TF <: Integer && (TF = Float64)
     A = convert(Matrix{TF}, A)
@@ -127,52 +128,73 @@ function convexfit(A::AbstractMatrix, b::AbstractVecOrMat; kwargs...)
     x0 = get(kwargs, :x0, nothing)
     if x0 !== nothing
         x0 = convert(Vector{TF}, x0)
-        return convexfit(A, b; x0=x0, kwargs...)
+        return convexfit(A, b, λ; x0=x0, kwargs...)
     else
-        return convexfit(A, b; kwargs...)
+        return convexfit(A, b, λ; kwargs...)
     end
 end
 
-function convexfit(A::Matrix{TF}, B::Matrix{TF};
-        cache=Cache(A), kwargs...) where TF<:AbstractFloat
-    N = size(B,2)
+function convexfit(A::Matrix{TF}, B::Matrix{TF}, λ=0.0;
+        multithreads::Bool=false, show_thread::Bool=multithreads, cache=Cache(A),
+        kwargs...) where TF<:AbstractFloat
+    N = size(B, 2)
     rs = Vector{SolverResult}(undef, N)
-    for i in axes(B, 2)
-        get(kwargs, :show_trace, false) && println("target $i of $N:")
-        rs[i] = convexfit(A, view(B,:,i); cache=cache, kwargs...)
+    if multithreads
+        Threads.@threads for i in axes(B, 2)
+            # Create new Cache for each call no matter whether cache is specified
+            rs[i] = convexfit(A, view(B,:,i), λ;
+                cache=Cache(A), show_thread=show_thread, kwargs...)
+        end
+    else
+        for i in axes(B, 2)
+            get(kwargs, :show_trace, false) && println("target $i of $N:")
+            rs[i] = convexfit(A, view(B,:,i), λ;
+                cache=cache, show_thread=show_thread, kwargs...)
+        end
     end
     return rs
 end
 
-function convexfit(A::AbstractMatrix; kwargs...)
+function convexfit(A::AbstractMatrix, λ=0.0; kwargs...)
     TF = eltype(A)
     TF <: Integer && (TF = Float64)
     A = convert(Matrix{TF}, A)
     x0 = get(kwargs, :x0, nothing)
     if x0 !== nothing
         x0 = convert(Vector{TF}, x0)
-        return convexfit(A; x0=x0, kwargs...)
+        return convexfit(A, λ; x0=x0, kwargs...)
     else
-        return convexfit(A; kwargs...)
+        return convexfit(A, λ; kwargs...)
     end
 end
 
-function convexfit(A::Matrix{TF}; loo::Bool=true, kwargs...) where TF<:AbstractFloat
+function convexfit(A::Matrix{TF}, λ=0.0;
+        loo::Bool=true, multithreads::Bool=false, show_thread::Bool=multithreads,
+        kwargs...) where TF<:AbstractFloat
     if loo
-        N = size(A,2)
+        N = size(A, 2)
         N > 1 || throw(ArgumentError("matrix A must contain at least two columns if loo=true"))
         rs = Vector{SolverResult}(undef, N)
-        ca = get(kwargs, :cache, nothing)
-        ca === nothing && (ca = Cache(view(A,:,2:N)))
-        for i in axes(A, 2)
-            get(kwargs, :show_trace, false) && println("target $i of $N:")
-            rs[i] = convexfit(view(A,:,axes(A,2).!=i), view(A,:,i); cache=ca, kwargs...)
+        if multithreads
+            Threads.@threads for i in axes(A, 2)
+                Aloo = view(A,:,axes(A,2).!=i)
+                # Create new Cache for each call no matter whether cache is specified
+                rs[i] = convexfit(Aloo, view(A,:,i), λ;
+                    cache=Cache(Aloo), show_thread=show_thread, kwargs...)
+            end
+        else
+            ca = get(kwargs, :cache, nothing)
+            ca === nothing && (ca = Cache(view(A,:,2:N)))
+            for i in axes(A, 2)
+                get(kwargs, :show_trace, false) && println("target $i of $N:")
+                rs[i] = convexfit(view(A,:,axes(A,2).!=i), view(A,:,i), λ;
+                    cache=ca, show_thread=show_thread, kwargs...)
+            end
         end
         return rs
     else
         ca = get(kwargs, :cache, nothing)
         ca === nothing && (ca = Cache(A))
-        return convexfit(A, A; cache=ca, kwargs...)
+        return convexfit(A, A, λ; cache=ca, kwargs...)
     end
 end
-

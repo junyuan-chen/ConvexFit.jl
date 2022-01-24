@@ -3,9 +3,18 @@ module ConvexFit
 using LinearAlgebra: mul!, dot
 using Printf
 
-import Base: show, push!, getindex
+import Base: ==, show, push!, getindex
 
-export convexfit
+export convexfit,
+
+       ModelSelection,
+       GridSearch,
+       grid,
+       OptimSearch,
+       optim,
+       ModelSelectionResult,
+       GridSearchResult,
+       loocv
 
 if VERSION < v"1.3"
     import LinearAlgebra: mul!
@@ -16,7 +25,9 @@ if VERSION < v"1.3"
     end
 end
 
+include("utils.jl")
 include("result.jl")
 include("fit.jl")
+include("select.jl")
 
 end # module
