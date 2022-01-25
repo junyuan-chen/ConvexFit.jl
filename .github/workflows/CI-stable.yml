@@ -42,9 +42,6 @@ jobs:
             ${{ runner.os }}-test-${{ env.cache-name }}-
             ${{ runner.os }}-test-
             ${{ runner.os }}-
-      # Resolve Optim compatibility for Julia v1.0
-      - name: Install Optim
-        run: julia --project=. -e "using Pkg; Pkg.add(\""Optim\""); Pkg.instantiate()"
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
       - uses: julia-actions/julia-processcoverage@v1
