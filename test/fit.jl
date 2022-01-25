@@ -56,6 +56,19 @@ end
     r = convexfit(A, b, x0=view(A,:,1))
     @test r.x0 == [1.0, 0.0]
 
+    r = convexfit(A, b, ftol=0)
+    @test r.x_converged
+    @test !r.f_converged
+
+    # The case when convergence is reached by dx all being zero
+    A = [1 0; 1 0]
+    r = convexfit(A, b, x0=[1.0,0.0], store_trace=true)
+    @test r.x_converged && r.f_converged
+    @test iszero(r.dfnorm)
+    @test iszero(r.dxnorm)
+    @test r.iter == 0
+    @test isempty(r.trace.states)
+
     A = [1 0 1; 0 1 1]
     b = [1, 1]
     ca = Cache(convert(Matrix{Float64}, A))
@@ -73,14 +86,26 @@ end
     @test r.sol ≈ [0.2, 0.2, 0.6]
     @test r.f ≈ 0.3
 
-    r = convexfit(A, A, 1)
+    ca = Cache(convert(Matrix{Float64}, A))
+    fill!(ca.Ax, 0.0)
+    ca1 = deepcopy(ca)
+    r = convexfit(A, A, cache=ca, 1)
     @test r[1].sol[1] ≈ r[2].sol[2]
     @test r[1].fit[1] ≈ r[2].fit[2]
     @test r[3].sol ≈ [0.25, 0.25, 0.5]
     @test r[3].f ≈ 0.5
+    # Check that the passed Cache is used when multithreads=false
+    @test ca.Ax != ca1.Ax
 
-    r1 = convexfit(A, A, 1, multithreads=false)
-    @test r1 == r
+    if VERSION >= v"1.2"
+        ca = Cache(convert(Matrix{Float64}, A))
+        fill!(ca.Ax, 0.0)
+        ca1 = deepcopy(ca)
+        r1 = convexfit(A, A, 1, cache=ca, multithreads=true)
+        @test r1 == r
+        # Check that the passed Cache is not used when multithreads=true
+        @test ca.Ax == ca1.Ax
+    end
 
     r = convexfit(A, 0.5, show_trace=true)
     @test length(r) == 3
@@ -88,15 +113,24 @@ end
     @test r[2].sol ≈ [0.25, 0.75]
     @test r[3].sol ≈ [0.5, 0.5]
 
-    r1 = convexfit(A, 0.5, show_trace=true, multithreads=false)
-    @test r1 == r
+    if VERSION >= v"1.2"
+        r1 = convexfit(A, 0.5, show_trace=true, multithreads=true)
+        @test r1 == r
+    end
+
+    r = convexfit(A, x0=[1,0])
+    @test r[1].x0 == [1.0, 0.0]
+    # Check that x0 is not copied after being converted
+    @test r[1].x0 === r[2].x0
 
     r = convexfit(A, loo=false, 0.5)
     @test length(r) == 3
     @test r[3].sol ≈ [0.2, 0.2, 0.6]
 
-    r1 = convexfit(A, loo=false, 0.5, multithreads=false)
-    @test r1 == r
+    if VERSION >= v"1.2"
+        r1 = convexfit(A, loo=false, 0.5, multithreads=true)
+        @test r1 == r
+    end
 
     @test_throws ArgumentError convexfit(A, b, x0=[2.0,0.0])
     @test_throws ArgumentError convexfit(A, b, -1.0)
