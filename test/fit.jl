@@ -97,7 +97,7 @@ end
     # Check that the passed Cache is used when multithreads=false
     @test ca.Ax != ca1.Ax
 
-    if VERSION >= v"1.2"
+    if testthreads
         ca = Cache(convert(Matrix{Float64}, A))
         fill!(ca.Ax, 0.0)
         ca1 = deepcopy(ca)
@@ -113,7 +113,7 @@ end
     @test r[2].sol ≈ [0.25, 0.75]
     @test r[3].sol ≈ [0.5, 0.5]
 
-    if VERSION >= v"1.2"
+    if testthreads
         r1 = convexfit(A, 0.5, show_trace=true, multithreads=true)
         @test r1 == r
     end
@@ -127,7 +127,7 @@ end
     @test length(r) == 3
     @test r[3].sol ≈ [0.2, 0.2, 0.6]
 
-    if VERSION >= v"1.2"
+    if testthreads
         r1 = convexfit(A, loo=false, 0.5, multithreads=true)
         @test r1 == r
     end

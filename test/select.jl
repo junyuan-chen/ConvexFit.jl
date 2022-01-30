@@ -37,7 +37,7 @@
     @test looca.Ax != looca1.Ax
     @test r[1][1].x0 === x0
 
-    if VERSION >= v"1.2"
+    if testthreads
         ca = Cache(A)
         fill!(ca.Ax, 0.0)
         ca1 = deepcopy(ca)
