@@ -2,6 +2,7 @@ module ConvexFit
 
 using LinearAlgebra: mul!, dot
 using Printf
+using Random: AbstractRNG, randperm!
 
 import Base: ==, show, push!, getindex
 
@@ -14,6 +15,7 @@ export convexfit,
        optim,
        ModelSelectionResult,
        GridSearchResult,
+       kfoldcv,
        loocv
 
 if VERSION < v"1.3"
@@ -23,6 +25,10 @@ if VERSION < v"1.3"
         lmul!(β, C)
         C .= C + A*B
     end
+    using Random: GLOBAL_RNG
+    default_rng() = GLOBAL_RNG
+else
+    using Random: default_rng
 end
 
 include("utils.jl")
