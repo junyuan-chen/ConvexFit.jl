@@ -132,7 +132,7 @@ end
         @test r1 == r
     end
 
-    @test_throws ArgumentError convexfit(A, b, x0=[2.0,0.0])
+    @test_logs (:warn, "sum of elements in x0 (3.0) is normalized to 1") convexfit(A, b, x0=[2.0,0.0,1.0])
     @test_throws ArgumentError convexfit(A, b, -1.0)
     @test_throws ArgumentError convexfit(reshape([1.0,0.0],2,1))
 end

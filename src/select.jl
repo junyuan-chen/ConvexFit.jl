@@ -1,3 +1,38 @@
+abstract type AbstractCVCache{T} end
+
+struct CVCache{TF<:AbstractFloat} <: AbstractCVCache{TF}
+    inds::Vector{Int}
+    Ain::Matrix{TF}
+    Aout::Matrix{TF}
+    bin::Vector{TF}
+    resid::Vector{TF}
+    fitca::Cache{TF}
+end
+
+function CVCache(TF::Type, M::Integer, N::Integer, K::Integer)
+    0 < K < M || throw(ArgumentError("invalid K=$K; must be between 0 and $M"))
+    inds = collect(1:M)
+    Ain = Matrix{TF}(undef, M-K, N)
+    Aout = Matrix{TF}(undef, K, N)
+    bin = Vector{TF}(undef, M-K)
+    resid = Vector{TF}(undef, K)
+    fitca = Cache(TF, M-K, N)
+    return CVCache{TF}(inds, Ain, Aout, bin, resid, fitca)
+end
+
+struct LOOCVCache{TF<:AbstractFloat} <: AbstractCVCache{TF}
+    Ain::Matrix{TF}
+    bin::Vector{TF}
+    fitca::Cache{TF}
+end
+
+function LOOCVCache(TF::Type, M::Integer, N::Integer)
+    Ain = Matrix{TF}(undef, M-1, N)
+    bin = Vector{TF}(undef, M-1)
+    fitca = Cache(TF, M-1, N)
+    return LOOCVCache{TF}(Ain, bin, fitca)
+end
+
 """
     ModelSelection
 
@@ -87,17 +122,77 @@ including estimates calculated for each parameter on the grid.
 
 # Fields
 - `iopt::Int`: index of the optimal parameter.
-- `loocv::Vector{TF}`: leave-one-out cross validation errors.
+- `cvs::Vector{TF}`: cross validation errors.
 """
 struct GridSearchResult{TF<:AbstractFloat} <: ModelSelectionResult
     iopt::Int
-    loocv::Vector{TF}
+    cvs::Vector{TF}
 end
 
 function show(io::IO, ::MIME"text/plain", sr::GridSearchResult)
-    N = length(sr.loocv)
+    N = length(sr.cvs)
     print(io, typeof(sr).name.name, " across ", N, " candidate value", N>1 ? "s:" : ":")
     print(io, " ", sr.iopt)
+end
+
+function _cv(A::Matrix{TF}, b::Vector{TF}, λ::Real, ca::CVCache{TF};
+        rng::Union{AbstractRNG,Nothing}=default_rng(), kwargs...) where TF<:AbstractFloat
+    M = size(A, 1)
+    K = length(ca.resid)
+    k = M ÷ K
+    cv = 0.0
+    rng === nothing || randperm!(rng, ca.inds)
+    @inbounds for i in 1:k
+        iout = (1:M) .∈ (view(ca.inds,(i-1)*K+1:i*K),)
+        iin = .~iout
+        copyto!(ca.Ain, view(A,iin,:))
+        copyto!(ca.Aout, view(A,iout,:))
+        copyto!(ca.bin, view(b,iin))
+        r = convexfit(ca.Ain, ca.bin, λ; kwargs..., cache=ca.fitca)
+        # Compute b - Ax across the left-out rows
+        copyto!(ca.resid, view(b,iout))
+        mul!(ca.resid, ca.Aout, r.sol, -one(TF), one(TF))
+        cv += sum(abs2, ca.resid)
+    end
+    return cv/(k*K)
+end
+
+"""
+    kfoldcv(A::Matrix, b::Vector, λ::Real, k::Integer=5; kwargs...)
+
+Return the k-fold cross validation error for
+fitting vector `b` with a convex combination of columns in matrix `A`
+when the regularization parameter is set to be `λ`.
+See also [`loocv`](@ref).
+
+The same set of keyword arguments for
+[`convexfit(::Matrix,::Vector,::Real)`](@ref) are accepted.
+"""
+function kfoldcv(A::Matrix{TF}, b::Vector{TF}, λ::Real, k::Integer=5;
+        cvcache::Union{CVCache{TF},Nothing}=nothing, kwargs...) where TF<:AbstractFloat
+    if cvcache === nothing
+        M, N = size(A)
+        0 < k <= M || throw(ArgumentError(
+            "invalid k=$k; must be positive and no larger than the number of rows in A ($M)"))
+        K = M ÷ k
+        cvcache = CVCache(TF, M, N, K)
+    end
+    return _cv(A, b, λ, cvcache; kwargs...)
+end
+
+function _cv(A::Matrix{TF}, b::Vector{TF}, λ::Real, ca::LOOCVCache{TF};
+        kwargs...) where TF<:AbstractFloat
+    M = size(A, 1)
+    cv = 0.0
+    @inbounds for m in 1:M
+        ir = (1:M).!=m
+        copyto!(ca.Ain, view(A,ir,:))
+        copyto!(ca.bin, view(b,ir))
+        r = convexfit(ca.Ain, ca.bin, λ; kwargs..., cache=ca.fitca)
+        loofit = dot(view(A,m,:), r.sol)
+        cv += (b[m] - loofit)^2
+    end
+    return cv/M
 end
 
 """
@@ -106,63 +201,72 @@ end
 Return the leave-one-out cross validation error for
 fitting vector `b` with a convex combination of columns in matrix `A`
 when the regularization parameter is set to be `λ`.
+See also [`kfoldcv`](@ref).
 
 The same set of keyword arguments for
 [`convexfit(::Matrix,::Vector,::Real)`](@ref) are accepted.
 """
-function loocv(A::Matrix{TF}, b::Vector{TF}, λ::Real; kwargs...) where TF<:AbstractFloat
-    M = size(A, 1)
-    looca = get(kwargs, :cache, nothing)
-    looca === nothing && (looca = Cache(view(A,2:M,:)))
-    loocv = 0.0
-    @inbounds for m in 1:M
-        ir = (1:M).!=m
-        loos = convexfit(view(A,ir,:), view(b,ir), λ; kwargs..., cache=looca)
-        loofit = dot(view(A,m,:), loos.sol)
-        loocv += (b[m] - loofit)^2
-    end
-    return loocv/M
+function loocv(A::Matrix{TF}, b::Vector{TF}, λ::Real;
+        cvcache::Union{LOOCVCache{TF},Nothing}=nothing, kwargs...) where TF<:AbstractFloat
+    cvcache === nothing && (cvcache = LOOCVCache(TF, size(A)...))
+    return _cv(A, b, λ, cvcache; kwargs...)
 end
 
-"""
-    convexfit(A::Matrix, b::Vector, λs::ModelSelection; looargs, kwargs...)
-
-Select the optimal regularization parameter `λ` based on leave-one-out cross validation
-with the method specified with `λs`
-and fit vector `b` with a convex combination of the columns in matrix `A`.
-Return a tuple of two objects, the result of fitting `b` and the result of selecting `λ`.
-See also [`grid`](@ref), [`optim`](@ref) and [`loocv`](@ref).
-
-All keyword arguments for [`convexfit(::Matrix,::Vector,::Real)`](@ref) are accepted.
-Additionally, keyword arguments for [`loocv`](@ref) can be specified
-with the keyword `looargs` and a `NamedTuple` or `Dict`.
-"""
-function convexfit(A::Matrix{TF}, b::Vector{TF}, λs::GridSearch;
-        looargs::Union{NamedTuple,Dict}=(show_trace=false, store_trace=false),
+function _convexfit(A::Matrix{TF}, b::Vector{TF}, λs::GridSearch, cvca::AbstractCVCache{TF};
+        cvargs::Union{NamedTuple,Dict}=(show_trace=false, store_trace=false),
         kwargs...) where TF<:AbstractFloat
-    K = length(λs.v)
-    M = size(A, 1)
-    M > 1 || throw(ArgumentError(
-        "matrix A must contain at least two rows for model selection"))
-    loocvs = Vector{Float64}(undef, K)
-    for k in 1:K
-        λ = λs.v[k]
-        loocvs[k] = loocv(A, b, λ; looargs...)
+    L = length(λs.v)
+    cvs = Vector{Float64}(undef, L)
+    for l in 1:L
+        λ = λs.v[l]
+        cvs[l] = _cv(A, b, λ, cvca; cvargs...)
     end
-    _, iopt = findmin(loocvs)
-    sr = GridSearchResult(iopt, loocvs)
+    _, iopt = findmin(cvs)
+    sr = GridSearchResult(iopt, cvs)
     r = convexfit(A, b, λs.v[iopt]; kwargs...)
     return r, sr
 end
 
-function convexfit(A::Matrix{TF}, b::Vector{TF}, λs::OptimSearch;
-        looargs::Union{NamedTuple,Dict}=(show_trace=false, store_trace=false),
+function _convexfit(A::Matrix{TF}, b::Vector{TF}, λs::OptimSearch, cvca::AbstractCVCache{TF};
+        cvargs::Union{NamedTuple,Dict}=(show_trace=false, store_trace=false),
         kwargs...) where TF<:AbstractFloat
-    M = size(A, 1)
-    M > 1 || throw(ArgumentError(
-        "matrix A must contain at least two rows for model selection"))
-    loocvobj(λ::Real) = loocv(A, b, λ; looargs...)
-    sr, λopt = λs.f(loocvobj)
+    cvobj(λ::Real) = _cv(A, b, λ, cvca; cvargs...)
+    sr, λopt = λs.f(cvobj)
     r = convexfit(A, b, λopt; kwargs...)
     return r, sr
+end
+
+"""
+    convexfit(A::Matrix, b::Vector, λs::ModelSelection; k, cvcache, cvargs, kwargs...)
+
+Select the optimal regularization parameter `λ` based on cross validation
+with the method specified with `λs`
+and fit vector `b` with a convex combination of the columns in matrix `A`.
+Return a tuple of two objects, the result of fitting `b` and the result of selecting `λ`.
+See also [`grid`](@ref), [`optim`](@ref), [`kfoldcv`](@ref) and [`loocv`](@ref).
+
+By default, leave-one-out cross validation is conducted.
+If `k` is specified, k-fold cross validation based on random partitioning is performed.
+
+All keyword arguments for [`convexfit(::Matrix,::Vector,::Real)`](@ref) are accepted.
+Additionally, keyword arguments for cross validation can be specified
+with the keyword `cvargs` and a `NamedTuple` or `Dict`.
+"""
+function convexfit(A::Matrix{TF}, b::Vector{TF}, λs::ModelSelection;
+        k::Union{Integer,Nothing}=nothing,
+        cvcache::Union{AbstractCVCache{TF},Nothing}=nothing,
+        kwargs...) where TF<:AbstractFloat
+    M, N = size(A)
+    M > 1 || throw(ArgumentError(
+        "matrix A must contain at least two rows for model selection"))
+    if cvcache === nothing
+        if k === nothing
+            cvcache = LOOCVCache(TF, M, N)
+        else
+            0 < k <= M || throw(ArgumentError("invalid k=$k; must be positive and no larger than the number of rows in A ($M)"))
+            K = M ÷ k
+            cvcache = K==1 ? LOOCVCache(TF, M, N) : CVCache(TF, M, N, K)
+        end
+    end
+    return _convexfit(A, b, λs, cvcache; kwargs...)
 end

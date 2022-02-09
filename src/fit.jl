@@ -6,20 +6,21 @@ struct Cache{TF<:AbstractFloat}
     dx::Vector{TF}
 end
 
-"""
-    Cache(A::AbstractMatrix)
-
-Allocate arrays for the solver based on the size of `A`.
-"""
-function Cache(A::AbstractMatrix{TF}) where TF<:AbstractFloat
-    M, N = size(A)
+function Cache(TF::Type, M::Integer, N::Integer)
     Ax = Vector{TF}(undef, M)
     resid = Vector{TF}(undef, M)
     dresid = Vector{TF}(undef, M)
     g = Vector{TF}(undef, N)
     dx = Vector{TF}(undef, N)
-    return Cache(Ax, resid, dresid, g, dx)
+    return Cache{TF}(Ax, resid, dresid, g, dx)
 end
+
+"""
+    Cache(A::AbstractMatrix)
+
+Allocate arrays for the solver based on the size and element type of `A`.
+"""
+Cache(A::AbstractMatrix{TF}) where TF<:AbstractFloat = Cache(TF, size(A)...)
 
 function updaterss!(A, b, x, ca)
     mul!(ca.Ax, A, x)
@@ -87,7 +88,11 @@ function convexfit(A::Matrix{TF}, b::Vector{TF}, λ::Real=zero(TF);
         show_thread::Bool=false,
         cache::Cache=Cache(A)) where TF<:AbstractFloat
 
-    sum(x0) == 1 || throw(ArgumentError("elements of x0 do not sum up to 1"))
+    sx = sum(x0)
+    if !(sx ≈ 1)
+        @warn "sum of elements in x0 ($sx) is normalized to 1"
+        x0 = x0./sx
+    end
     λ = convert(TF, λ)
     λ < 0 && throw(ArgumentError("regularization parameter cannot be negative"))
 
